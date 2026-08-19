@@ -28,7 +28,14 @@ def fetch_data(url: str) -> str:
         return f"\nОшибка загрузки {url}: {e}"
 
 def analyze(data: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+    # Пробуем актуальные эндпоинты по очереди
+    candidate_urls = [
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}",
+        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
+    ]
+    
     headers = {"Content-Type": "application/json"}
     prompt = f"""
 Ты — профессиональный аналитик спортивной линии. Проанализируй данные матча:
@@ -38,19 +45,21 @@ def analyze(data: str) -> str:
 Выдай строгий разбор и сводную таблицу:
 | Турнир | Матч | Выбор | Риск |
 """
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    try:
-        res = httpx.post(url, headers=headers, json=payload, timeout=40.0)
-        res_json = res.json()
-        if "candidates" in res_json:
-            return res_json["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            return f"Ответ Google API: {res_json.get('error', {}).get('message', 'Неизвестная ошибка')}"
-    except Exception as e:
-        return f"Ошибка соединения с Gemini: {str(e)}"
+    last_error = ""
+    for api_url in candidate_urls:
+        try:
+            res = httpx.post(api_url, headers=headers, json=payload, timeout=35.0)
+            res_json = res.json()
+            if "candidates" in res_json:
+                return res_json["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                last_error = res_json.get("error", {}).get("message", str(res_json))
+        except Exception as e:
+            last_error = str(e)
+            
+    return f"Ошибка API: {last_error}"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
