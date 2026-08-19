@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import threading
 import httpx
 import telebot
@@ -34,15 +35,15 @@ def analyze_with_search(user_input: str) -> str:
     prompt = f"""
 Контекст:
 {user_input}
-Ты — спортивный аналитик линии и калькулятор рисков.
+Ты — сухой спортивный аналитик линии и калькулятор рисков.
 Текущий год: 2026. Язык: строго русский.
 ИНСТРУКЦИЯ:
 Найди через Google Search по базам Tennis Abstract и Flashscore:
 1. Hard/Surface Elo, Hold %, Break %, Dominance Ratio (DR), Win % на 2-й подаче.
 2. Итоги 5 последних игр и H2H.
-ТРЕБОВАНИЕ К ФОРМАТУ:
-Никаких длинных рассуждений, воды и мыслей! Выдай ТОЛЬКО короткую выжимку в таком виде:
-📊 **Метрики Tennis Abstract (Хард/Покрытие)**
+ФОРМАТ ВЫДАЧИ:
+Никакой воды, мыслей и вступительных фраз. Выдай ТОЛЬКО короткий блок:
+📊 **Метрики Tennis Abstract**
 • [Игрок 1]: Elo: X | Hold: X% | Break: X% | DR: X | 2nd Srv Win: X%
 • [Игрок 2]: Elo: X | Hold: X% | Break: X% | DR: X | 2nd Srv Win: X%
 📋 **Итоговый вердикт по линии**
@@ -81,7 +82,6 @@ def analyze_with_search(user_input: str) -> str:
                     parts = res_json["candidates"][0].get("content", {}).get("parts", [])
                     text_parts = [p.get("text", "") for p in parts if "text" in p and not p.get("thought", False)]
                     full_text = "".join(text_parts).strip()
-                    # Отрезаем любые черновые рассуждения
                     clean_text = re.sub(r'(?i)^.*?(?=📊|\*\*Метрики)', '', full_text, flags=re.DOTALL)
                     return clean_text.strip() if clean_text.strip() else full_text
                 else:
@@ -111,7 +111,17 @@ def handle_msg(message):
         match_context = "\n".join(extracted) + "\n\n" + raw_text
         
     report = analyze_with_search(match_context)
-    bot.edit_message_text(report, chat_id=message.chat.id, message_id=msg.message_id)
+    try:
+        bot.edit_message_text(report, chat_id=message.chat.id, message_id=msg.message_id)
+    except Exception:
+        bot.send_message(message.chat.id, report)
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    bot.infinity_polling()
+    
+    # Сброс зависших сессий и хуков
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+    except Exception:
+        pass
+    bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
