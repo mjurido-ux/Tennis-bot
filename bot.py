@@ -1,139 +1,90 @@
 import os
-import re
-import time
-import threading
+import asyncio
 import httpx
-import telebot
-from bs4 import BeautifulSoup
-from flask import Flask
-app = Flask(__name__)
-# Ваш Telegram ID
-ALLOWED_USER_ID = 365657270
-@app.route('/')
-def home():
-    return "OK"
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-threading.Thread(target=run_flask, daemon=True).start()
-bot = telebot.TeleBot(os.getenv("BOT_TOKEN"), threaded=True)
-GEMINI_KEY = os.getenv("GEMINI_KEY")
-def send_long_message(chat_id, text, reply_to_msg_id=None):
-    max_len = 4000
-    if len(text) <= max_len:
-        if reply_to_msg_id:
-            try:
-                bot.edit_message_text(text, chat_id=chat_id, message_id=reply_to_msg_id)
-                return
-            except Exception:
-                pass
-        bot.send_message(chat_id, text)
-        return
-    if reply_to_msg_id:
-        try:
-            bot.delete_message(chat_id=chat_id, message_id=reply_to_msg_id)
-        except Exception:
-            pass
-    parts = []
-    while len(text) > max_len:
-        split_idx = text.rfind('\n', 0, max_len)
-        if split_idx == -1:
-            split_idx = max_len
-        parts.append(text[:split_idx])
-        text = text[split_idx:].lstrip()
-    if text:
-        parts.append(text)
-    for part in parts:
-        bot.send_message(chat_id, part)
-def fetch_page_context(url: str) -> str:
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        with httpx.Client(follow_redirects=True, headers=headers, timeout=8.0) as client:
-            resp = client.get(url)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            title = soup.title.string if soup.title else ""
-            desc = ""
-            tag = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
-            if tag and tag.get('content'):
-                desc = tag['content']
-            return f"{title} | {desc}"
-    except Exception:
-        return url
-def analyze_with_search(user_input: str) -> str:
-    headers = {"Content-Type": "application/json"}
-    
-    prompt = f"""
-Контекст запроса:
-{user_input}
-Ты — спортивный аналитик линии и калькулятор рисков.
-Язык: строго русский.
-ЗАДАЧА:
-Для каждого матча найди через Google Search по базам Tennis Abstract и Flashscore:
-1. Surface Elo, Hold %, Break %, Dominance Ratio (DR), 2nd Serve Win %.
-2. Проанализируй рынки (исходы, форы по геймам/сетам, тоталы для нивелирования рисков).
-ФОРМАТ ВЫДАЧИ:
-📊 **Метрики Tennis Abstract**
-• [Игрок 1] vs [Игрок 2]: Elo X/X | Hold X%/X% | Break X%/X% | DR X/X
-📋 **Сводная таблица по линии**
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+SYSTEM_PROMPT = """
+ТЫ — ПРОФЕССИОНАЛЬНЫЙ АНАЛИТИК ТЕННИСНЫХ ЛИНИЙ И МАРКЕТОВ.
+Твоя задача — строгий предматчевый аудит. Запрещено делать выводы только по устаревшим или средним годовым цифрам.
+ОБЯЗАТЕЛЬНЫЙ АЛГОРИТМ ПРОВЕРКИ (ДЛЯ КАЖДОГО МАТЧА):
+1. ТЕКУЩАЯ ФОРМА L8 (ОБЯЗАТЕЛЬНЫЙ БАЗОВЫЙ ФИЛЬТР):
+   - Найди через поиск точные результаты последних 8 официальных матчей (W/L) для каждого игрока.
+   - Детализация: точные счета, покрытие, уровень обыгранных соперников (топ-10/20/50/челленджеры), наличие отказов (retirements), признаков травм или физического спада.
+2. МЕТРИКИ TENNIS ABSTRACT:
+   - Surface Elo, Hold %, Break %, Dominance Ratio (DR).
+3. АНАЛИЗ ВСЕХ РЫНКОВ (НЕ ТОЛЬКО ИСХОДЫ):
+   - Оценивать чистые исходы, форы по геймам/сетам и тоталы.
+   - Обязательно использовать плюсовые/минусовые форы (point spreads) для нейтрализации опасных сценариев и защиты ставки.
+ФОРМАТ ВЫВОДА:
+📊 **Форма игроков (L8) и метрики**
+• **[Игрок 1]**: L8: [W/L 8 матчей] (Детализация: соперники, кого обыграл/кому уступил, отказы) | Elo: [X] | Hold: [X]% | Break: [X]% | DR: [X]
+• **[Игрок 2]**: L8: [W/L 8 матчей] (Детализация: соперники, кого обыграл/кому уступил, отказы) | Elo: [X] | Hold: [X]% | Break: [X]% | DR: [X]
+📋 **Итоговый вердикт по линии**
 
-| # | Матч | Выбор (все маркеты) | Главный фактор и риск |
-| :--- | :--- | :--- | :--- |
-| 1 | ... | ... | ... |
+| Матч | Выбор маркета | Фактор L8, метрики и ключевой риск |
+| :--- | :--- | :--- |
+| **[Игрок 1] vs [Игрок 2]** | [П1 / П2 / Фора / Тотал] | **[Уровень риска: Низкий/Средний/Высокий].** Обоснование с обязательной привязкой к серии L8, оппозиции и покрытию. |
 
 """
+async def query_gemini(user_message: str) -> str:
+    headers = {"Content-Type": "application/json"}
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"temperature": 0.1}
+        "contents": [
+            {
+                "parts": [
+                    {"text": SYSTEM_PROMPT},
+                    {"text": f"Проанализируй следующие матчи:\n{user_message}"}
+                ]
+            }
+        ],
+        "tools": [
+            {"google_search": {}}
+        ]
     }
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={GEMINI_KEY}"
-    
-    try:
-        with httpx.Client(timeout=120.0) as client:
-            res = client.post(url, headers=headers, json=payload)
-            res_json = res.json()
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        response = await client.post(GEMINI_API_URL, headers=headers, json=payload)
+        
+        if response.status_code == 429:
+            return "⚠️ Ошибка 429: Исчерпан лимит запросов к Google API. Дождитесь сброса лимита или используйте Tier 1."
+        
+        if response.status_code != 200:
+            return f"⚠️ Ошибка API ({response.status_code}): {response.text}"
             
-            if "candidates" in res_json:
-                parts = res_json["candidates"][0].get("content", {}).get("parts", [])
-                text_parts = [p.get("text", "") for p in parts if "text" in p and not p.get("thought", False)]
-                full_text = "".join(text_parts).strip()
-                clean_text = re.sub(r'(?i)^.*?(?=📊|\*\*Метрики)', '', full_text, flags=re.DOTALL)
-                return clean_text.strip() if clean_text.strip() else full_text
-            elif "error" in res_json:
-                return f"⚠️ Ошибка API Gemini: {res_json['error'].get('message', 'Неизвестная ошибка')}"
-    except Exception as e:
-        return f"⚠️ Ошибка соединения: {str(e)}"
-    return "⚠️ Не удалось получить ответ от модели. Попробуйте еще раз."
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    if message.from_user.id != ALLOWED_USER_ID:
-        bot.reply_to(message, "⛔ Доступ запрещен. Это приватный бот.")
-        return
-    bot.reply_to(message, "🎾 Аналитический бот активен. Отправьте список матчей.")
-@bot.message_handler(content_types=['text', 'photo'])
-def handle_msg(message):
-    if message.from_user.id != ALLOWED_USER_ID:
-        bot.reply_to(message, "⛔ Доступ запрещен.")
-        return
-    raw_text = message.text or message.caption or ""
-    if not raw_text.strip():
-        bot.reply_to(message, "Отправьте список матчей.")
-        return
-        
-    msg = bot.reply_to(message, "⏳ Рассчитываю метрики и риски...")
+        data = response.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            return "⚠️ Не удалось разобрать ответ от Gemini API."
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎾 Бот спортивной аналитики готов к работе.\n\n"
+        "Отправьте список матчей, и я сделаю аудит по форме L8 (последние 8 игр), метрикам Tennis Abstract и подберу оптимальные маркеты (исходы, форы, тоталы)."
+    )
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    status_msg = await update.message.reply_text("🔍 Анализирую последние 8 матчей игроков и рассчитываю маркеты...")
     
-    urls = re.findall(r'https?://[^\s]+', raw_text)
-    match_context = raw_text
-    if urls:
-        extracted = [fetch_page_context(u) for u in urls]
-        match_context = "\n".join(extracted) + "\n\n" + raw_text
+    analysis = await query_gemini(user_text)
+    
+    if len(analysis) > 4000:
+        for chunk in range(0, len(analysis), 4000):
+            await update.message.reply_text(analysis[chunk:chunk + 4000], parse_mode="Markdown")
+        await status_msg.delete()
+    else:
+        await status_msg.edit_text(analysis, parse_mode="Markdown")
+def main():
+    if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
+        raise ValueError("Не заданы TELEGRAM_BOT_TOKEN или GEMINI_API_KEY в переменных окружения!")
         
-    report = analyze_with_search(match_context)
-    send_long_message(message.chat.id, report, reply_to_msg_id=msg.message_id)
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("Бот успешно запущен...")
+    app.run_polling()
 if __name__ == "__main__":
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-    except Exception:
-        pass
-    bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
+    main()
