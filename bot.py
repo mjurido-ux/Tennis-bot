@@ -28,17 +28,9 @@ def fetch_data(url: str) -> str:
         return f"\nОшибка загрузки {url}: {e}"
 
 def analyze(data: str) -> str:
-    # Пробуем актуальные эндпоинты по очереди
-    candidate_urls = [
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}",
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
-    ]
-    
     headers = {"Content-Type": "application/json"}
     prompt = f"""
-Ты — профессиональный аналитик спортивной линии. Проанализируй данные матча:
+Ты — профессиональный спортивный аналитик линии. Проанализируй данные матча:
 {data}
 
 Оцени форму, H2H, покрытие, физическую готовность и маркеты (форы/тоталы/исход).
@@ -46,20 +38,38 @@ def analyze(data: str) -> str:
 | Турнир | Матч | Выбор | Риск |
 """
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    
-    last_error = ""
-    for api_url in candidate_urls:
-        try:
-            res = httpx.post(api_url, headers=headers, json=payload, timeout=35.0)
-            res_json = res.json()
-            if "candidates" in res_json:
-                return res_json["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                last_error = res_json.get("error", {}).get("message", str(res_json))
-        except Exception as e:
-            last_error = str(e)
+
+    try:
+        # 1. Автоматически получаем список доступных моделей для вашего ключа
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
+        list_res = httpx.get(list_url, timeout=15.0).json()
+        
+        if "error" in list_res:
+            return f"Ошибка API ключа: {list_res['error'].get('message')}"
             
-    return f"Ошибка API: {last_error}"
+        models = [
+            m["name"] for m in list_res.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+        
+        if not models:
+            return f"Нет доступных моделей для генерации. Ответ сервера: {list_res}"
+
+        # Предпочитаем flash, если есть, иначе берем первую доступную
+        target_model = next((m for m in models if "flash" in m), models[0])
+
+        # 2. Отправляем запрос к гарантированно активной модели
+        gen_url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={GEMINI_KEY}"
+        res = httpx.post(gen_url, headers=headers, json=payload, timeout=40.0)
+        res_json = res.json()
+
+        if "candidates" in res_json:
+            return res_json["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            return f"Ответ Google ({target_model}): {res_json.get('error', {}).get('message', str(res_json))}"
+
+    except Exception as e:
+        return f"Ошибка соединения: {str(e)}"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
