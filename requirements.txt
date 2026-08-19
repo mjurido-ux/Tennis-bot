@@ -1,5 +1,6 @@
-aiogram==3.15.0
-google-generativeai==0.8.3
+pyTelegramBotAPI
+google-generativeai
 httpx
 beautifulsoup4
+
 
