@@ -1,9 +1,7 @@
-pyTelegramBotAPI
-google-generativeai
-httpx
-beautifulsoup4
-flask
-gunicorn
+python-telegram-bot>=20.0
+httpx>=0.25.0
+flask>=3.0.0
+
 
 
 
