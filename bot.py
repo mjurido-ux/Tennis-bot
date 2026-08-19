@@ -20,7 +20,6 @@ bot = telebot.TeleBot(os.getenv("BOT_TOKEN"))
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 
 def send_long_message(chat_id, text, reply_to_msg_id=None):
-    """Разбивает длинный отчет на части до 4000 символов и отправляет последовательно."""
     max_len = 4000
     if len(text) <= max_len:
         if reply_to_msg_id:
@@ -32,7 +31,6 @@ def send_long_message(chat_id, text, reply_to_msg_id=None):
         bot.send_message(chat_id, text)
         return
 
-    # Если текст длинный — удаляем статусное сообщение и шлем частями
     if reply_to_msg_id:
         try:
             bot.delete_message(chat_id=chat_id, message_id=reply_to_msg_id)
@@ -76,27 +74,39 @@ def analyze_with_search(user_input: str) -> str:
 ВХОДНЫЕ ДАННЫЕ:
 {user_input}
 
+ЖЕСТКИЕ ПРАВИЛА И ЯЗЫК:
+- ОТВЕТ ДОЛЖЕН БЫТЬ ПОЛНОСТЬЮ НА РУССКОМ ЯЗЫКЕ.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО выводить внутренние мысли, рассуждения (Chain of Thought), черновики, промпты или технические команды.
+- Выдавай СРАЗУ готовый структурированный отчет без лишних вступительных приветствий.
+
 ИНСТРУКЦИЯ ПО ВЕБ-ПОИСКУ:
-1. Выполни поиск через Google Search по базам Tennis Abstract, Flashscore и статистике тура:
-   - Найди последние 5 сыгранных матчей каждого игрока (дата, счет по сетам/геймам, турнир, статус).
-   - Найди историю H2H за последние 6-12 месяцев.
-   - ОБЯЗАТЕЛЬНО найди метрики Tennis Abstract (за 52 недели на текущем покрытии):
-     * Surface Elo Rating обоих игроков
-     * Hold % (удержание подачи) и Break % (брейки на приеме)
+1. Выполни поиск через Google Search по базам Tennis Abstract, Flashscore и официальной статистике тура:
+   - Последние 5 сыгранных матчей каждого игрока (дата, счет, турнир).
+   - Личные встречи (H2H) за последние 6-12 месяцев.
+   - Метрики Tennis Abstract (за 52 недели на текущем покрытии):
+     * Hard/Clay/Grass Elo Rating
+     * Hold % (удержание подачи) и Break % (брейки)
      * Dominance Ratio (DR)
      * Win % на 2-й подаче (своей и чужой)
 
 2. РОЛЬ И АЛГОРИТМ ПРОВЕРКИ:
-   Ты — сухой аналитик спортивной линии и калькулятор рисков.
-   - Оцени уровень оппозиции в последних 5 играх, отсекай победы на ITF/Челленджерах.
-   - Проверь маркеры физической усталости (>2.5 ч на корте, снятия, тайм-ауты).
-   - Обоснуй маркеты: если рассматривается фора (-3.5 и крупнее), подтверди ее через разницу Hold/Break % и Dominance Ratio. Ищи страхующие форы и тоталы для нивелирования рисков.
+   Ты — сухой аналитик спортивной линии.
+   - Оцени уровень оппозиции (отсекай низкосортные турниры).
+   - Проверь физическую усталость (>2.5 ч на корте, снятия).
+   - Обоснуй маркеты: анализируй не только исходы, но и форы по геймам/сетам и тоталы для нивелирования рисков.
 
-3. СТРУКТУРА ВЫДАЧИ:
-   - Метрики Tennis Abstract (Hard Elo, Hold %, Break %, DR).
-   - Последние 5 матчей и H2H.
-   - Разбор рисков и логика маркетов.
-   - Финальная таблица:
+3. СТРОГИЙ ФОРМАТ ВЫДАЧИ (ТОЛЬКО ЭТОТ БЛОК НА РУССКОМ):
+
+**1. Метрики Tennis Abstract**
+[Показатели Elo на покрытии, Hold/Break %, DR, 2nd Serve Win %]
+
+**2. Последние 5 матчей и H2H**
+[Сухие факты по результатам]
+
+**3. Анализ рисков и маркетов**
+[Математическое обоснование выбора фор/тоталов]
+
+**4. Итоговая таблица**
 | Турнир/Время | Матч | Рекомендуемый выбор (все маркеты) | Главный фактор / Уровень риска |
 """
 
@@ -125,7 +135,11 @@ def analyze_with_search(user_input: str) -> str:
                 res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
                 res_json = res.json()
                 if "candidates" in res_json:
-                    return res_json["candidates"][0]["content"]["parts"][0]["text"]
+                    text_out = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                    # Очистка от возможных служебных тегов
+                    text_out = re.sub(r'<thought>.*?</thought>', '', text_out, flags=re.DOTALL)
+                    text_out = re.sub(r'```json.*?```', '', text_out, flags=re.DOTALL)
+                    return text_out.strip()
                 else:
                     last_error = f"{full_model_name}: {res_json.get('error', {}).get('message', 'нет ответа')}"
             except Exception as e:
@@ -139,7 +153,7 @@ def analyze_with_search(user_input: str) -> str:
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "🎾 Аналитический бот готов к работе. Отправьте ссылку на матч или имена игроков.")
+    bot.reply_to(message, "🎾 Аналитический бот готов к работе. Отправьте ссылку на матч Flashscore или имена игроков.")
 
 @bot.message_handler(content_types=['text', 'photo'])
 def handle_msg(message):
