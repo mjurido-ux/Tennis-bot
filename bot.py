@@ -1,8 +1,19 @@
 import os
 import asyncio
+import threading
 import httpx
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+# --- 1. Микро-сервер Flask для Render ---
+server = Flask(__name__)
+@server.route('/')
+def home():
+    return "Bot is running!"
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    server.run(host="0.0.0.0", port=port)
+# --- 2. Настройки Telegram и Gemini ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -48,7 +59,7 @@ async def query_gemini(user_message: str) -> str:
         response = await client.post(GEMINI_API_URL, headers=headers, json=payload)
         
         if response.status_code == 429:
-            return "⚠️ Ошибка 429: Исчерпан лимит запросов к Google API. Дождитесь сброса лимита или используйте Tier 1."
+            return "⚠️ Ошибка 429: Исчерпан лимит запросов к Google API. Дождитесь сброса в 00:00 UTC или подключите Pay-As-You-Go."
         
         if response.status_code != 200:
             return f"⚠️ Ошибка API ({response.status_code}): {response.text}"
@@ -61,7 +72,7 @@ async def query_gemini(user_message: str) -> str:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎾 Бот спортивной аналитики готов к работе.\n\n"
-        "Отправьте список матчей, и я сделаю аудит по форме L8 (последние 8 игр), метрикам Tennis Abstract и подберу оптимальные маркеты (исходы, форы, тоталы)."
+        "Отправьте список матчей, и я сделаю аудит по форме L8 (последние 8 игр), метрикам Tennis Abstract и подберу оптимальные маркеты."
     )
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -78,13 +89,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
         raise ValueError("Не заданы TELEGRAM_BOT_TOKEN или GEMINI_API_KEY в переменных окружения!")
-        
+    # Запуск Flask в фоновом потоке для Render
+    threading.Thread(target=run_flask, daemon=True).start()
+    # Запуск Telegram Polling
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Бот успешно запущен...")
+    print("Бот и Flask-сервер успешно запущены...")
     app.run_polling()
 if __name__ == "__main__":
     main()
