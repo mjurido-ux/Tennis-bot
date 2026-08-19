@@ -2,5 +2,8 @@ pyTelegramBotAPI
 google-generativeai
 httpx
 beautifulsoup4
+flask
+gunicorn
+
 
 
