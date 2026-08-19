@@ -37,8 +37,6 @@ def fetch_page_context(url: str) -> str:
         return url
 
 def analyze_with_search(user_input: str) -> str:
-    # Используем endpoint с поддержкой Google Search Grounding
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -46,19 +44,19 @@ def analyze_with_search(user_input: str) -> str:
 {user_input}
 
 ИНСТРУКЦИЯ:
-1. Сделай веб-поиск (через Google Search) и найди точные статистические факты для игроков/команд:
-   - Последние 5 сыгранных матчей по календарю (дата, счет, турнир, затяжные 3-сетовики/снятия).
+1. Сделай веб-поиск (через Google Search) и найди точные статистические факты для участников матча:
+   - Последние 5 сыгранных матчей по календарю (дата, точный счет по сетам/геймам, турнир, затяжные матчи/снятия).
    - Личные встречи (H2H) за последние 6-12 месяцев.
    
 2. РОЛЬ И РЕЖИМ РАБОТЫ:
    Ты — сухой, бескомпромиссный аналитик линии спортивных событий и калькулятор рисков. Приступай к глубокому анализу без лишних вступлений и воды.
 
 3. АЛГОРИТМ ПРОВЕРКИ:
-   - Уровень оппозиции: Оцени последние 5 матчей. Победы над игроками с Челленджеров/ITF или из третьей сотни не являются показателем формы.
+   - Уровень оппозиции: Оцени последние 5 матчей. Победы над игроками из третьей сотни/Челленджеров не являются показателем формы для уровня основы.
    - H2H и покрытие: Кто побеждал в свежих встречах? Винрейт и профильность на текущем покрытии.
-   - Физический риск: Маркеры усталости (матчи >2.5 часов, медицинские тайм-ауты, свежие снятия).
-   - Календарь: Защита очков, возможный спад перед более крупным турниром.
-   - АНАЛИЗ ВСЕХ МАРКЕТОВ: Анализируй все рынки, а не только базовые П1/П2. Ищи варианты, где форы (плюсовые/минусовые по геймам/сетам) или тоталы идеально нивелируют опасные ситуации и сглаживают риски.
+   - Физический риск: Маркеры усталости (затяжные матчи вчера/позавчера, медицинские тайм-ауты, снятия).
+   - Календарь: Защита очков, возможная потеря концентрации перед более крупным стартом.
+   - АНАЛИЗ ВСЕХ МАРКЕТОВ (КРИТИЧЕСКИ ВАЖНО): Анализируй все рынки для игры, а не только базовые исходы П1/П2. Ищи варианты, где форы (плюсовые или минусовые по геймам/сетам) или тоталы идеально нивелируют опасные ситуации и сглаживают риски.
 
 4. ФОРМАТ ВЫДАЧИ:
    - Никаких оценочных суждений про «настрой». Только цифры и жесткая логика.
@@ -69,33 +67,36 @@ def analyze_with_search(user_input: str) -> str:
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}]  # Включение веб-поиска Google внутри Gemini
+        "tools": [{"google_search": {}}]
     }
 
-    try:
-        res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
-        res_json = res.json()
-        
-        # Если модель 2.0 недоступна, запасной запрос без явного инструмента поиска
-        if "candidates" in res_json:
-            return res_json["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_KEY}"
-            fallback_payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "tools": [{"google_search": {}}]
-            }
-            res_fb = httpx.post(fallback_url, headers=headers, json=fallback_payload, timeout=60.0)
-            fb_json = res_fb.json()
-            if "candidates" in fb_json:
-                return fb_json["candidates"][0]["content"]["parts"][0]["text"]
-            return f"Ответ Google API: {res_json.get('error', {}).get('message', str(res_json))}"
-    except Exception as e:
-        return f"Ошибка выполнения анализа: {str(e)}"
+    # Приоритетный список актуальных моделей
+    target_models = [
+        "gemini-3.7-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro",
+        "gemini-2.5-flash"
+    ]
+
+    last_error = ""
+    for model_name in target_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_KEY}"
+        try:
+            res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+            res_json = res.json()
+            if "candidates" in res_json:
+                return res_json["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                last_error = res_json.get("error", {}).get("message", "Нет ответа")
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return f"Ошибка обращения к Gemini: {last_error}"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "🎾 Аналитический бот готов. Отправьте ссылку на матч, скриншот с текстом или просто имена игроков/команд.")
+    bot.reply_to(message, "🎾 Бот готов! Отправьте ссылку на матч Flashscore или имена соперников.")
 
 @bot.message_handler(content_types=['text', 'photo'])
 def handle_msg(message):
@@ -106,7 +107,6 @@ def handle_msg(message):
         
     msg = bot.reply_to(message, "⏳ Выполняю веб-поиск данных, H2H и расчет рисков...")
     
-    # Если в сообщении есть ссылка, извлекаем заголовок страницы для точного поиска
     urls = re.findall(r'https?://[^\s]+', raw_text)
     match_context = raw_text
     if urls:
