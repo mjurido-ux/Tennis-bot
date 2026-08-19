@@ -1,3 +1,5 @@
+
+    
 import asyncio
 import os
 import re
@@ -14,7 +16,7 @@ dp = Dispatcher()
 genai.configure(api_key=GEMINI_KEY)
 
 async def scrape_match_data(browser, url: str) -> str:
-    context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     page = await context.new_page()
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=25000)
@@ -24,9 +26,8 @@ async def scrape_match_data(browser, url: str) -> str:
         for el in elements[:12]:
             txt = await el.inner_text()
             clean = " ".join(txt.split())
-            if clean:
-                lines.append(clean)
-        return f"\n--- МАТЧ ({url}) ---\n" + ("\n".join(lines) if lines else "Данные не найдены")
+            if clean: lines.append(clean)
+        return f"\n--- МАТЧ ({url}) ---\n" + ("\n".join(lines) if lines else "Нет данных")
     except Exception as e:
         return f"\n--- Ошибка ({url}): {str(e)} ---"
     finally:
@@ -35,22 +36,8 @@ async def scrape_match_data(browser, url: str) -> str:
 
 def analyze_all(raw_data: str) -> str:
     model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"""
-РОЛЬ: Сухой аналитик, калькулятор рисков. Данные:
-{raw_data}
-
-АЛГОРИТМ:
-1. Уровень оппозиции (форма по 5 матчам).
-2. H2H и покрытие.
-3. Физический риск (усталость).
-4. Календарь (логика турнира).
-5. АНАЛИЗ МАРКЕТОВ: Форы, тоталы, риски.
-
-ФОРМАТ: Только цифры и факты. Если нет надежных вариантов — пиши «НЕТ НАДЕЖНЫХ ВАРИАНТОВ». Итоговая таблица:
-| Турнир | Матч | Выбор | Риск |
-"""
-    response = model.generate_content(prompt)
-    return response.text
+    prompt = f"Роль: Аналитик. Данные: {raw_data}. Сделай анализ (форма, H2H, риск, календарь, рынки). Выдай таблицу: | Турнир | Матч | Выбор | Риск |"
+    return model.generate_content(prompt).text
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
@@ -63,13 +50,10 @@ async def handle_links(message: types.Message):
     status = await message.answer("⏳ Сбор данных...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        tasks = [scrape_match_data(browser, u) for u in urls]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*[scrape_match_data(browser, u) for u in urls])
         await browser.close()
-    combined = "\n".join(results)
     await status.edit_text("📊 Анализ...")
-    report = analyze_all(combined)
-    await message.answer(report)
+    await message.answer(analyze_all("\n".join(results)))
     await status.delete()
 
 async def main():
