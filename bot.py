@@ -1,4 +1,4 @@
-import os
+ import os
 import asyncio
 import threading
 import httpx
@@ -21,8 +21,8 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     server.run(host="0.0.0.0", port=port)
 
-# --- 2. Системный промпт с L8 и рынками ---
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+# --- 2. Системный промпт с L8 и моделью 3.7 ---
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={GEMINI_API_KEY}"
 
 SYSTEM_PROMPT = """
 ТЫ — ПРОФЕССИОНАЛЬНЫЙ АНАЛИТИК ТЕННИСНЫХ ЛИНИЙ И МАРКЕТОВ.
@@ -85,17 +85,13 @@ async def query_gemini(user_message: str) -> str:
             return "⚠️ Не удалось разобрать ответ от Gemini API."
 
 async def send_safe_message(update: Update, status_msg, text: str):
-    """Безопасная отправка с защитой от сбоев Markdown"""
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-    
-    # Редактируем первое статусное сообщение
     first_chunk = chunks[0]
     try:
         await status_msg.edit_text(first_chunk, parse_mode="Markdown")
     except Exception:
-        await status_msg.edit_text(first_chunk)  # Отправка без Markdown при конфликте символов
+        await status_msg.edit_text(first_chunk)
         
-    # Если ответ длинный, досылаем остальные куски
     for chunk in chunks[1:]:
         try:
             await update.message.reply_text(chunk, parse_mode="Markdown")
@@ -127,3 +123,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+   
