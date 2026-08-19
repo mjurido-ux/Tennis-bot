@@ -7,17 +7,44 @@ import telebot
 from bs4 import BeautifulSoup
 from flask import Flask
 app = Flask(__name__)
+# Приватный доступ только для вашего аккаунта
+ALLOWED_USER_ID = 365657270
 @app.route('/')
 def home():
     return "OK"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-# Запуск Flask в фоновом потоке ДО бота
 threading.Thread(target=run_flask, daemon=True).start()
-bot_token = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(bot_token, threaded=True)
+bot = telebot.TeleBot(os.getenv("BOT_TOKEN"), threaded=True)
 GEMINI_KEY = os.getenv("GEMINI_KEY")
+def send_long_message(chat_id, text, reply_to_msg_id=None):
+    max_len = 4000
+    if len(text) <= max_len:
+        if reply_to_msg_id:
+            try:
+                bot.edit_message_text(text, chat_id=chat_id, message_id=reply_to_msg_id)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text)
+        return
+    if reply_to_msg_id:
+        try:
+            bot.delete_message(chat_id=chat_id, message_id=reply_to_msg_id)
+        except Exception:
+            pass
+    parts = []
+    while len(text) > max_len:
+        split_idx = text.rfind('\n', 0, max_len)
+        if split_idx == -1:
+            split_idx = max_len
+        parts.append(text[:split_idx])
+        text = text[split_idx:].lstrip()
+    if text:
+        parts.append(text)
+    for part in parts:
+        bot.send_message(chat_id, part)
 def fetch_page_context(url: str) -> str:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -39,20 +66,19 @@ def analyze_with_search(user_input: str) -> str:
 Контекст запроса:
 {user_input}
 Ты — спортивный аналитик линии и калькулятор рисков.
-Язык: русский.
+Язык: строго русский.
 ЗАДАЧА:
-Найди через Google Search по базам Tennis Abstract и Flashscore:
-1. Hard/Surface Elo, Hold %, Break %, Dominance Ratio (DR), Win % на 2-й подаче.
-2. Итоги последних матчей и H2H.
-ВЫДАЙ ТОЛЬКО КОРОТКУЮ ВЫЖИМКУ:
+Для каждого матча найди через Google Search по базам Tennis Abstract и Flashscore:
+1. Surface Elo, Hold %, Break %, Dominance Ratio (DR), 2nd Serve Win %.
+2. Проанализируй рынки (исходы, форы по геймам/сетам, тоталы для нивелирования рисков).
+ФОРМАТ ВЫДАЧИ:
 📊 **Метрики Tennis Abstract**
-• [Игрок 1]: Elo: X | Hold: X% | Break: X% | DR: X
-• [Игрок 2]: Elo: X | Hold: X% | Break: X% | DR: X
-📋 **Итоговый вердикт**
+• [Игрок 1] vs [Игрок 2]: Elo X/X | Hold X%/X% | Break X%/X% | DR X/X
+📋 **Сводная таблица по линии**
 
-| Матч | Выбор маркета | Риск / Фактор |
-| :--- | :--- | :--- |
-| Игрок 1 vs Игрок 2 | ... | ... |
+| # | Матч | Выбор (все маркеты) | Главный фактор и риск |
+| :--- | :--- | :--- | :--- |
+| 1 | ... | ... | ... |
 
 """
     payload = {
@@ -60,42 +86,39 @@ def analyze_with_search(user_input: str) -> str:
         "tools": [{"google_search": {}}],
         "generationConfig": {"temperature": 0.1}
     }
-    try:
-        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
-        list_res = httpx.get(list_url, timeout=10.0).json()
-        
-        if "error" in list_res:
-            return f"Ошибка API ключа: {list_res['error'].get('message')}"
-            
-        models = [
-            m["name"] for m in list_res.get("models", [])
-            if "generateContent" in m.get("supportedGenerationMethods", [])
-        ]
-        models.sort(key=lambda x: ("flash" in x, "3." in x), reverse=True)
-        for model_name in models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_KEY}"
-            try:
-                res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+    models = ["gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    last_error = ""
+    for model_name in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_KEY}"
+        try:
+            with httpx.Client(timeout=90.0) as client:
+                res = client.post(url, headers=headers, json=payload)
                 res_json = res.json()
+                
                 if "candidates" in res_json:
                     parts = res_json["candidates"][0].get("content", {}).get("parts", [])
                     text_parts = [p.get("text", "") for p in parts if "text" in p and not p.get("thought", False)]
                     full_text = "".join(text_parts).strip()
                     clean_text = re.sub(r'(?i)^.*?(?=📊|\*\*Метрики)', '', full_text, flags=re.DOTALL)
                     return clean_text.strip() if clean_text.strip() else full_text
-            except Exception:
-                continue
-        return "Не удалось получить расчет от модели. Попробуйте еще раз."
-    except Exception as e:
-        return f"Ошибка соединения: {str(e)}"
+                elif "error" in res_json:
+                    last_error = res_json["error"].get("message", "Лимит исчерпан")
+        except Exception as e:
+            last_error = str(e)
+            continue
+    return f"⚠️ Ошибка обработки: {last_error}"
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    print(f"--> Получена команда /start от {message.chat.id}", flush=True)
-    bot.reply_to(message, "🎾 Аналитический бот активен. Отправьте матч или список матчей.")
+    if message.from_user.id != ALLOWED_USER_ID:
+        bot.reply_to(message, "⛔ Доступ запрещен. Это приватный бот.")
+        return
+    bot.reply_to(message, "🎾 Аналитический бот активен. Отправьте список матчей.")
 @bot.message_handler(content_types=['text', 'photo'])
 def handle_msg(message):
+    if message.from_user.id != ALLOWED_USER_ID:
+        bot.reply_to(message, "⛔ Доступ запрещен.")
+        return
     raw_text = message.text or message.caption or ""
-    print(f"--> Получено сообщение: {raw_text[:30]}...", flush=True)
     if not raw_text.strip():
         bot.reply_to(message, "Отправьте список матчей.")
         return
@@ -109,17 +132,11 @@ def handle_msg(message):
         match_context = "\n".join(extracted) + "\n\n" + raw_text
         
     report = analyze_with_search(match_context)
-    try:
-        bot.edit_message_text(report, chat_id=message.chat.id, message_id=msg.message_id)
-    except Exception:
-        bot.send_message(message.chat.id, report)
+    send_long_message(message.chat.id, report, reply_to_msg_id=msg.message_id)
 if __name__ == "__main__":
-    print("--> Бот запускается...", flush=True)
     try:
         bot.remove_webhook()
         time.sleep(1)
     except Exception:
         pass
-        
-    print("--> Polling запущен", flush=True)
     bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
