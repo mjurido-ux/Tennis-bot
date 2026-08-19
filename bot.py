@@ -7,7 +7,7 @@ import telebot
 from bs4 import BeautifulSoup
 from flask import Flask
 app = Flask(__name__)
-# Приватный доступ только для вашего аккаунта
+# Ваш Telegram ID
 ALLOWED_USER_ID = 365657270
 @app.route('/')
 def home():
@@ -86,27 +86,24 @@ def analyze_with_search(user_input: str) -> str:
         "tools": [{"google_search": {}}],
         "generationConfig": {"temperature": 0.1}
     }
-    models = ["gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
-    last_error = ""
-    for model_name in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_KEY}"
-        try:
-            with httpx.Client(timeout=90.0) as client:
-                res = client.post(url, headers=headers, json=payload)
-                res_json = res.json()
-                
-                if "candidates" in res_json:
-                    parts = res_json["candidates"][0].get("content", {}).get("parts", [])
-                    text_parts = [p.get("text", "") for p in parts if "text" in p and not p.get("thought", False)]
-                    full_text = "".join(text_parts).strip()
-                    clean_text = re.sub(r'(?i)^.*?(?=📊|\*\*Метрики)', '', full_text, flags=re.DOTALL)
-                    return clean_text.strip() if clean_text.strip() else full_text
-                elif "error" in res_json:
-                    last_error = res_json["error"].get("message", "Лимит исчерпан")
-        except Exception as e:
-            last_error = str(e)
-            continue
-    return f"⚠️ Ошибка обработки: {last_error}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={GEMINI_KEY}"
+    
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            res = client.post(url, headers=headers, json=payload)
+            res_json = res.json()
+            
+            if "candidates" in res_json:
+                parts = res_json["candidates"][0].get("content", {}).get("parts", [])
+                text_parts = [p.get("text", "") for p in parts if "text" in p and not p.get("thought", False)]
+                full_text = "".join(text_parts).strip()
+                clean_text = re.sub(r'(?i)^.*?(?=📊|\*\*Метрики)', '', full_text, flags=re.DOTALL)
+                return clean_text.strip() if clean_text.strip() else full_text
+            elif "error" in res_json:
+                return f"⚠️ Ошибка API Gemini: {res_json['error'].get('message', 'Неизвестная ошибка')}"
+    except Exception as e:
+        return f"⚠️ Ошибка соединения: {str(e)}"
+    return "⚠️ Не удалось получить ответ от модели. Попробуйте еще раз."
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     if message.from_user.id != ALLOWED_USER_ID:
