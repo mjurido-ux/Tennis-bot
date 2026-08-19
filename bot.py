@@ -1,60 +1,37 @@
-
-    
 import asyncio
 import os
 import re
+import httpx
+from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from playwright.async_api import async_playwright
 import google.generativeai as genai
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_KEY")
-
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp = Dispatcher()
-genai.configure(api_key=GEMINI_KEY)
+genai.configure(api_key=os.getenv("GEMINI_KEY"))
 
-async def scrape_match_data(browser, url: str) -> str:
-    context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    page = await context.new_page()
+async def fetch_data(url: str) -> str:
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        await asyncio.sleep(2)
-        elements = await page.locator(".h2h__section, .event__match").all()
-        lines = []
-        for el in elements[:12]:
-            txt = await el.inner_text()
-            clean = " ".join(txt.split())
-            if clean: lines.append(clean)
-        return f"\n--- МАТЧ ({url}) ---\n" + ("\n".join(lines) if lines else "Нет данных")
+        async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = await client.get(url, timeout=10.0)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            text = soup.get_text(separator=' ', strip=True)
+            return f"\n--- МАТЧ ({url}) ---\n" + text[:2000] # берем первые 2000 символов
     except Exception as e:
-        return f"\n--- Ошибка ({url}): {str(e)} ---"
-    finally:
-        await page.close()
-        await context.close()
+        return f"\nОшибка {url}: {e}"
 
-def analyze_all(raw_data: str) -> str:
+def analyze(data: str) -> str:
     model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"Роль: Аналитик. Данные: {raw_data}. Сделай анализ (форма, H2H, риск, календарь, рынки). Выдай таблицу: | Турнир | Матч | Выбор | Риск |"
-    return model.generate_content(prompt).text
-
-@dp.message(CommandStart())
-async def start_cmd(message: types.Message):
-    await message.answer("Бот готов. Пришлите ссылки.")
+    return model.generate_content(f"Аналитик, данные: {data}. Выдай анализ рынков и таблицу: | Турнир | Матч | Выбор | Риск |").text
 
 @dp.message()
-async def handle_links(message: types.Message):
+async def handle(message: types.Message):
     urls = re.findall(r'https?://[^\s]+', message.text)
     if not urls: return
-    status = await message.answer("⏳ Сбор данных...")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        results = await asyncio.gather(*[scrape_match_data(browser, u) for u in urls])
-        await browser.close()
-    await status.edit_text("📊 Анализ...")
-    await message.answer(analyze_all("\n".join(results)))
-    await status.delete()
+    await message.answer("⏳ Анализирую...")
+    results = await asyncio.gather(*[fetch_data(u) for u in urls])
+    await message.answer(analyze("\n".join(results)))
 
 async def main():
     await dp.start_polling(bot)
