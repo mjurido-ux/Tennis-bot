@@ -1,23 +1,18 @@
-import asyncio
 import os
 import re
 import httpx
+import telebot
 from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
 import google.generativeai as genai
 
-bot = Bot(token=os.getenv("BOT_TOKEN"))
-dp = Dispatcher()
+bot = telebot.TeleBot(os.getenv("BOT_TOKEN"))
 genai.configure(api_key=os.getenv("GEMINI_KEY"))
 
-async def fetch_data(url: str) -> str:
+def fetch_data(url: str) -> str:
     try:
-        async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
-            resp = await client.get(url, timeout=10.0)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            text = soup.get_text(separator=' ', strip=True)
-            return f"\n--- МАТЧ ({url}) ---\n" + text[:2000] # берем первые 2000 символов
+        resp = httpx.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        return f"\n--- {url} ---\n" + soup.get_text(separator=' ', strip=True)[:2000]
     except Exception as e:
         return f"\nОшибка {url}: {e}"
 
@@ -25,17 +20,18 @@ def analyze(data: str) -> str:
     model = genai.GenerativeModel('gemini-1.5-flash')
     return model.generate_content(f"Аналитик, данные: {data}. Выдай анализ рынков и таблицу: | Турнир | Матч | Выбор | Риск |").text
 
-@dp.message()
-async def handle(message: types.Message):
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "Бот готов. Пришлите ссылку на матч.")
+
+@bot.message_handler(func=lambda message: True)
+def handle_msg(message):
     urls = re.findall(r'https?://[^\s]+', message.text)
     if not urls: return
-    await message.answer("⏳ Анализирую...")
-    results = await asyncio.gather(*[fetch_data(u) for u in urls])
-    await message.answer(analyze("\n".join(results)))
+    msg = bot.reply_to(message, "⏳ Сбор данных...")
+    results = [fetch_data(u) for u in urls]
+    bot.edit_message_text("📊 Анализ...", chat_id=message.chat.id, message_id=msg.message_id)
+    report = analyze("\n".join(results))
+    bot.edit_message_text(report, chat_id=message.chat.id, message_id=msg.message_id)
 
-async def main():
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-    
+bot.infinity_polling()
