@@ -19,6 +19,39 @@ def run_flask():
 bot = telebot.TeleBot(os.getenv("BOT_TOKEN"))
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 
+def send_long_message(chat_id, text, reply_to_msg_id=None):
+    """Разбивает длинный отчет на части до 4000 символов и отправляет последовательно."""
+    max_len = 4000
+    if len(text) <= max_len:
+        if reply_to_msg_id:
+            try:
+                bot.edit_message_text(text, chat_id=chat_id, message_id=reply_to_msg_id)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text)
+        return
+
+    # Если текст длинный — удаляем статусное сообщение и шлем частями
+    if reply_to_msg_id:
+        try:
+            bot.delete_message(chat_id=chat_id, message_id=reply_to_msg_id)
+        except Exception:
+            pass
+
+    parts = []
+    while len(text) > max_len:
+        split_idx = text.rfind('\n', 0, max_len)
+        if split_idx == -1:
+            split_idx = max_len
+        parts.append(text[:split_idx])
+        text = text[split_idx:].lstrip()
+    if text:
+        parts.append(text)
+
+    for part in parts:
+        bot.send_message(chat_id, part)
+
 def fetch_page_context(url: str) -> str:
     try:
         headers = {
@@ -44,28 +77,26 @@ def analyze_with_search(user_input: str) -> str:
 {user_input}
 
 ИНСТРУКЦИЯ ПО ВЕБ-ПОИСКУ:
-1. Выполни поиск через Google Search по базам Tennis Abstract, Flashscore и официальной статистике тура:
-   - Найди последние 5 сыгранных матчей каждого игрока (дата, точный счет по сетам/геймам, турнир, статус).
+1. Выполни поиск через Google Search по базам Tennis Abstract, Flashscore и статистике тура:
+   - Найди последние 5 сыгранных матчей каждого игрока (дата, счет по сетам/геймам, турнир, статус).
    - Найди историю H2H за последние 6-12 месяцев.
-   - ОБЯЗАТЕЛЬНО найди и извлеки метрики Tennis Abstract (за последние 52 недели на текущем покрытии):
-     * Surface Elo Rating обоих соперников
-     * Hold % (процент удержания своей подачи) и Break % (процент брейков на приеме)
+   - ОБЯЗАТЕЛЬНО найди метрики Tennis Abstract (за 52 недели на текущем покрытии):
+     * Surface Elo Rating обоих игроков
+     * Hold % (удержание подачи) и Break % (брейки на приеме)
      * Dominance Ratio (DR)
      * Win % на 2-й подаче (своей и чужой)
 
-2. РОЛЬ И СТРОГИЙ АЛГОРИТМ ПРОВЕРКИ:
-   Ты — сухой, бескомпромиссный аналитик спортивной линии и калькулятор рисков.
-   - Оцени класс оппозиции и текущую форму по фактам, отсекая победы на низкосортных турнирах.
-   - Проанализируй физическую нагрузку: матчи длительностью >2.5 часов, снятия, медицинские тайм-ауты.
-   - Проведи математическую сверку маркетов:
-     * Если рассматривается фора (-3.5 и крупнее), обоснуй ее через разницу Hold/Break % и Dominance Ratio.
-     * Проанализируй все доступные рынки (плюсовые/минусовые форы по сетам и геймам, тоталы), чтобы нивелировать риски просадки фаворита.
+2. РОЛЬ И АЛГОРИТМ ПРОВЕРКИ:
+   Ты — сухой аналитик спортивной линии и калькулятор рисков.
+   - Оцени уровень оппозиции в последних 5 играх, отсекай победы на ITF/Челленджерах.
+   - Проверь маркеры физической усталости (>2.5 ч на корте, снятия, тайм-ауты).
+   - Обоснуй маркеты: если рассматривается фора (-3.5 и крупнее), подтверди ее через разницу Hold/Break % и Dominance Ratio. Ищи страхующие форы и тоталы для нивелирования рисков.
 
-3. СТРУКТУРА ОТВЕТА:
-   - Метрики Tennis Abstract (Hard Elo, Hold %, Break %, Dominance Ratio).
-   - Последние 5 матчей и H2H (сухие факты).
-   - Разбор рисков и математическое обоснование маркетов.
-   - Итоговая таблица:
+3. СТРУКТУРА ВЫДАЧИ:
+   - Метрики Tennis Abstract (Hard Elo, Hold %, Break %, DR).
+   - Последние 5 матчей и H2H.
+   - Разбор рисков и логика маркетов.
+   - Финальная таблица:
 | Турнир/Время | Матч | Рекомендуемый выбор (все маркеты) | Главный фактор / Уровень риска |
 """
 
@@ -75,7 +106,6 @@ def analyze_with_search(user_input: str) -> str:
     }
 
     try:
-        # Автоматическое определение рабочей модели
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
         list_res = httpx.get(list_url, timeout=15.0).json()
         
@@ -86,8 +116,6 @@ def analyze_with_search(user_input: str) -> str:
             m["name"] for m in list_res.get("models", [])
             if "generateContent" in m.get("supportedGenerationMethods", [])
         ]
-        
-        # Приоритет быстрым моделям
         available_models.sort(key=lambda x: ("flash" in x, "3." in x, "pro" in x), reverse=True)
 
         last_error = ""
@@ -111,13 +139,13 @@ def analyze_with_search(user_input: str) -> str:
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "🎾 Бот-аналитик линии готов. Отправьте ссылку на матч Flashscore или имена игроков.")
+    bot.reply_to(message, "🎾 Аналитический бот готов к работе. Отправьте ссылку на матч или имена игроков.")
 
 @bot.message_handler(content_types=['text', 'photo'])
 def handle_msg(message):
     raw_text = message.text or message.caption or ""
     if not raw_text.strip():
-        bot.reply_to(message, "Пожалуйста, отправьте ссылку на матч или имена соперников.")
+        bot.reply_to(message, "Пожалуйста, отправьте ссылку на матч или имена игроков.")
         return
         
     msg = bot.reply_to(message, "⏳ Собираю статистику Tennis Abstract, форму и рассчитываю риски...")
@@ -129,9 +157,8 @@ def handle_msg(message):
         match_context = "\n".join(extracted) + "\n\nИсходный текст: " + raw_text
         
     report = analyze_with_search(match_context)
-    bot.edit_message_text(report, chat_id=message.chat.id, message_id=msg.message_id)
+    send_long_message(message.chat.id, report, reply_to_msg_id=msg.message_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     bot.infinity_polling()
-            
