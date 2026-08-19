@@ -45,7 +45,7 @@ def analyze_with_search(user_input: str) -> str:
 
 ИНСТРУКЦИЯ:
 1. Сделай веб-поиск (через Google Search) и найди точные статистические факты для участников матча:
-   - Последние 5 сыгранных матчей по календарю (дата, точный счет по сетам/геймам, турнир, затяжные матчи/снятия).
+   - Последние 5 сыгранных матчей по календарю (дата, точный счет по сетам/геймам, турнир, уровень оппозиции, затяжные матчи/снятия).
    - Личные встречи (H2H) за последние 6-12 месяцев.
    
 2. РОЛЬ И РЕЖИМ РАБОТЫ:
@@ -70,12 +70,12 @@ def analyze_with_search(user_input: str) -> str:
         "tools": [{"google_search": {}}]
     }
 
-    # Приоритетный список актуальных моделей
+    # На первом месте — Gemini 3.7 Flash
     target_models = [
         "gemini-3.7-flash",
+        "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
-        "gemini-3.1-pro",
-        "gemini-2.5-flash"
+        "gemini-3.1-pro"
     ]
 
     last_error = ""
@@ -105,7 +105,7 @@ def handle_msg(message):
         bot.reply_to(message, "Пожалуйста, отправьте ссылку на матч или имена соперников.")
         return
         
-    msg = bot.reply_to(message, "⏳ Выполняю веб-поиск данных, H2H и расчет рисков...")
+    msg = bot.reply_to(message, "⏳ Выполняю поиск данных через Gemini 3.7 и расчет рисков...")
     
     urls = re.findall(r'https?://[^\s]+', raw_text)
     match_context = raw_text
