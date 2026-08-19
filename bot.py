@@ -52,7 +52,7 @@ def analyze_with_search(user_input: str) -> str:
    Ты — сухой, бескомпромиссный аналитик линии спортивных событий и калькулятор рисков. Приступай к глубокому анализу без лишних вступлений и воды.
 
 3. АЛГОРИТМ ПРОВЕРКИ:
-   - Уровень оппозиции: Оцени последние 5 матчей. Победы над игроками из третьей сотни/Челленджеров не являются показателем формы для уровня основы.
+   - Уровень оппозиции: Оцени последние 5 матчей. Победы над игроками из третьей сотни/Челленджеров не являются показателем формы.
    - H2H и покрытие: Кто побеждал в свежих встречах? Винрейт и профильность на текущем покрытии.
    - Физический риск: Маркеры усталости (затяжные матчи вчера/позавчера, медицинские тайм-ауты, снятия).
    - Календарь: Защита очков, возможная потеря концентрации перед более крупным стартом.
@@ -70,29 +70,41 @@ def analyze_with_search(user_input: str) -> str:
         "tools": [{"google_search": {}}]
     }
 
-    # На первом месте — Gemini 3.7 Flash
-    target_models = [
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-pro"
-    ]
+    try:
+        # 1. Получаем список реально доступных моделей в вашем ключе
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
+        list_res = httpx.get(list_url, timeout=15.0).json()
+        
+        if "error" in list_res:
+            return f"Ошибка API ключа: {list_res['error'].get('message')}"
+            
+        available_models = [
+            m["name"] for m in list_res.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+        
+        if not available_models:
+            return f"Доступные модели не найдены. Ответ Google: {list_res}"
 
-    last_error = ""
-    for model_name in target_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_KEY}"
-        try:
-            res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
-            res_json = res.json()
-            if "candidates" in res_json:
-                return res_json["candidates"][0]["content"]["parts"][0]["text"]
-            else:
-                last_error = res_json.get("error", {}).get("message", "Нет ответа")
-        except Exception as e:
-            last_error = str(e)
-            continue
+        # 2. Перебираем исключительно те модели, которые отдал сам Google
+        last_error = ""
+        for full_model_name in available_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{full_model_name}:generateContent?key={GEMINI_KEY}"
+            try:
+                res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+                res_json = res.json()
+                if "candidates" in res_json:
+                    return res_json["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    last_error = f"{full_model_name}: {res_json.get('error', {}).get('message', 'нет ответа')}"
+            except Exception as e:
+                last_error = f"{full_model_name}: {str(e)}"
+                continue
 
-    return f"Ошибка обращения к Gemini: {last_error}"
+        return f"Ошибки при запросе к моделям:\n{last_error}\n\nСписок доступных моделей: {', '.join(available_models)}"
+
+    except Exception as e:
+        return f"Ошибка соединения: {str(e)}"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -105,7 +117,7 @@ def handle_msg(message):
         bot.reply_to(message, "Пожалуйста, отправьте ссылку на матч или имена соперников.")
         return
         
-    msg = bot.reply_to(message, "⏳ Выполняю поиск данных через Gemini 3.7 и расчет рисков...")
+    msg = bot.reply_to(message, "⏳ Выполняю веб-поиск и расчет рисков...")
     
     urls = re.findall(r'https?://[^\s]+', raw_text)
     match_context = raw_text
@@ -119,4 +131,3 @@ def handle_msg(message):
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     bot.infinity_polling()
-    
