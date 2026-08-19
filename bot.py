@@ -15,6 +15,33 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 bot = telebot.TeleBot(os.getenv("BOT_TOKEN"))
 GEMINI_KEY = os.getenv("GEMINI_KEY")
+def send_long_message(chat_id, text, reply_to_msg_id=None):
+    max_len = 4000
+    if len(text) <= max_len:
+        if reply_to_msg_id:
+            try:
+                bot.edit_message_text(text, chat_id=chat_id, message_id=reply_to_msg_id)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text)
+        return
+    if reply_to_msg_id:
+        try:
+            bot.delete_message(chat_id=chat_id, message_id=reply_to_msg_id)
+        except Exception:
+            pass
+    parts = []
+    while len(text) > max_len:
+        split_idx = text.rfind('\n', 0, max_len)
+        if split_idx == -1:
+            split_idx = max_len
+        parts.append(text[:split_idx])
+        text = text[split_idx:].lstrip()
+    if text:
+        parts.append(text)
+    for part in parts:
+        bot.send_message(chat_id, part)
 def fetch_page_context(url: str) -> str:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -26,39 +53,38 @@ def fetch_page_context(url: str) -> str:
             tag = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
             if tag and tag.get('content'):
                 desc = tag['content']
-            return f"Данные страницы: {title} | {desc}"
+            return f"Матч: {title} | {desc}"
     except Exception:
         return url
 def analyze_with_search(user_input: str) -> str:
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
-Контекст:
+ВХОДНЫЕ ДАННЫЕ (СПИСОК МАТЧЕЙ):
 {user_input}
 Ты — сухой спортивный аналитик линии и калькулятор рисков.
 Текущий год: 2026. Язык: строго русский.
-ИНСТРУКЦИЯ:
-Найди через Google Search по базам Tennis Abstract и Flashscore:
-1. Hard/Surface Elo, Hold %, Break %, Dominance Ratio (DR), Win % на 2-й подаче.
-2. Итоги 5 последних игр и H2H.
+ЗАДАЧА:
+Для КАЖДОГО матча из списка найди через Google Search (Tennis Abstract, Flashscore):
+- Surface Elo, Hold %, Break %, Dominance Ratio (DR), Win % на 2-й подаче.
+- Текущую форму и H2H.
+- Проанализируй все рынки (исходы, форы по сетам/геймам, тоталы для нивелирования рисков).
 ФОРМАТ ВЫДАЧИ:
-Никакой воды, мыслей и вступительных фраз. Выдай ТОЛЬКО короткий блок:
+Никаких вводных слов, мыслей и воды. Только компактный отчет:
 📊 **Метрики Tennis Abstract**
-• [Игрок 1]: Elo: X | Hold: X% | Break: X% | DR: X | 2nd Srv Win: X%
-• [Игрок 2]: Elo: X | Hold: X% | Break: X% | DR: X | 2nd Srv Win: X%
-📋 **Итоговый вердикт по линии**
+[Для каждого матча короткая строка: Игрок 1 vs Игрок 2 -> Elo / Hold / Break / DR]
+📋 **Сводная таблица по линии**
 
-| Матч | Рекомендуемый выбор (форы/тоталы/исход) | Главный фактор и риск |
-| :--- | :--- | :--- |
-| Игрок 1 vs Игрок 2 | ... | ... |
+| # | Матч | Выбор (все маркеты) | Главный фактор и риск |
+| :--- | :--- | :--- | :--- |
+| 1 | Игрок 1 vs Игрок 2 | ... | ... |
+| 2 | Игрок 3 vs Игрок 4 | ... | ... |
 
 """
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"google_search": {}}],
-        "generationConfig": {
-            "temperature": 0.1
-        }
+        "generationConfig": {"temperature": 0.1}
     }
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
@@ -76,7 +102,7 @@ def analyze_with_search(user_input: str) -> str:
         for model_name in models:
             url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_KEY}"
             try:
-                res = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+                res = httpx.post(url, headers=headers, json=payload, timeout=90.0)
                 res_json = res.json()
                 if "candidates" in res_json:
                     parts = res_json["candidates"][0].get("content", {}).get("parts", [])
@@ -94,31 +120,28 @@ def analyze_with_search(user_input: str) -> str:
         return f"Ошибка сети: {str(e)}"
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "🎾 Отправьте ссылку на матч Flashscore.")
+    bot.reply_to(message, "🎾 Отправьте список ссылок Flashscore (по одной в строке) или список матчей текстом.")
 @bot.message_handler(content_types=['text', 'photo'])
 def handle_msg(message):
     raw_text = message.text or message.caption or ""
     if not raw_text.strip():
-        bot.reply_to(message, "Отправьте ссылку на матч Flashscore.")
+        bot.reply_to(message, "Отправьте список матчей.")
         return
         
-    msg = bot.reply_to(message, "⏳ Рассчитываю метрики и риски...")
-    
     urls = re.findall(r'https?://[^\s]+', raw_text)
+    
+    count_label = f"({len(urls)} шт.)" if urls else ""
+    msg = bot.reply_to(message, f"⏳ Анализирую блок матчей {count_label}... Сверяю Tennis Abstract и линию...")
+    
     match_context = raw_text
     if urls:
         extracted = [fetch_page_context(u) for u in urls]
-        match_context = "\n".join(extracted) + "\n\n" + raw_text
+        match_context = "\n".join(extracted) + "\n\nИсходный ввод:\n" + raw_text
         
     report = analyze_with_search(match_context)
-    try:
-        bot.edit_message_text(report, chat_id=message.chat.id, message_id=msg.message_id)
-    except Exception:
-        bot.send_message(message.chat.id, report)
+    send_long_message(message.chat.id, report, reply_to_msg_id=msg.message_id)
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    
-    # Сброс зависших сессий и хуков
     try:
         bot.remove_webhook()
         time.sleep(1)
