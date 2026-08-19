@@ -1,4 +1,4 @@
- import os
+import os
 import asyncio
 import threading
 import httpx
@@ -21,7 +21,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     server.run(host="0.0.0.0", port=port)
 
-# --- 2. Системный промпт с L8 и моделью 3.7 ---
+# --- 2. Системный промпт с L8 и моделью gemini-3.7-flash ---
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={GEMINI_API_KEY}"
 
 SYSTEM_PROMPT = """
@@ -123,4 +123,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-   
