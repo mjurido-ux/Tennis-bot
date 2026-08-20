@@ -75,7 +75,7 @@ def analyze_with_search(user_input: str) -> str:
 2. МЕТРИКИ TENNIS ABSTRACT:
    - Surface Elo, Hold %, Break %, Dominance Ratio (DR), 2nd Serve Win %.
 3. АНАЛИЗ ВСЕХ РЫНКОВ:
-   - Оцени чистые исходы, форы по геймам/сетам и тоталы для нивелирования рисков.
+   - Исходы, форы по геймам/сетам, тоталы для нивелирования рисков.
 ФОРМАТ ВЫДАЧИ:
 📊 **Форма L8 и метрики Tennis Abstract**
 • [Игрок 1]: L8: [W/L 8 матчей] (соперники, отказы) | Elo X | Hold X% | Break X% | DR X
@@ -92,7 +92,7 @@ def analyze_with_search(user_input: str) -> str:
         "generationConfig": {"temperature": 0.1}
     }
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_KEY}"
     
     for attempt in range(3):
         try:
