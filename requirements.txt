@@ -2,6 +2,8 @@ pyTelegramBotAPI
 httpx
 flask
 beautifulsoup4
+duckduckgo-search
+
 
 
 
