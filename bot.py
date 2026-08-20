@@ -16,6 +16,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 threading.Thread(target=run_flask, daemon=True).start()
+# Ключи доступа
 TELEGRAM_BOT_TOKEN = "8941843904:" + "AAGJ4jY3xPZZx1rOmPSOznZDJIpEoE7Y3vQ"
 GEMINI_KEY = "AQ.Ab8RN6Iov2hfVt-o" + "Hpiv5vSkcDMDD8W2c43EuIaNFd4ZTvKNAw"
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, threaded=True)
@@ -93,7 +94,7 @@ def analyze_with_search(user_input: str) -> str:
         "generationConfig": {"temperature": 0.1}
     }
     
-    models = ["gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    models = ["gemini-3.6-flash", "gemini-3.7-flash"]
     last_error = ""
     
     for model_name in models:
@@ -132,7 +133,7 @@ def handle_msg(message):
         bot.reply_to(message, "Отправьте список матчей.")
         return
         
-    msg = bot.reply_to(message, "⏳ Рассчитываю метрики и риски...")
+    msg = bot.reply_to(message, "⏳ Рассчитываю форму L8, метрики и маркеты...")
     
     urls = re.findall(r'https?://[^\s]+', raw_text)
     match_context = raw_text
