@@ -70,13 +70,12 @@ def analyze_with_search(user_input: str) -> str:
 Ты — спортивный аналитик линии и калькулятор рисков.
 Язык: строго русский.
 ЗАДАЧА:
-Для каждого матча найди через Google Search по базам Tennis Abstract и Flashscore:
 1. ТЕКУЩАЯ ФОРМА L8 (ОБЯЗАТЕЛЬНЫЙ БАЗОВЫЙ ФИЛЬТР):
    - Детальный разбор последних 8 официальных матчей (W/L) каждого игрока: счета, покрытие, уровень оппозиции, отказы, спад формы.
 2. МЕТРИКИ TENNIS ABSTRACT:
    - Surface Elo, Hold %, Break %, Dominance Ratio (DR), 2nd Serve Win %.
 3. АНАЛИЗ ВСЕХ РЫНКОВ:
-   - Исходы, форы по геймам/сетам, тоталы для нивелирования рисков.
+   - Оцени чистые исходы, форы по геймам/сетам и тоталы для нивелирования рисков.
 ФОРМАТ ВЫДАЧИ:
 📊 **Форма L8 и метрики Tennis Abstract**
 • [Игрок 1]: L8: [W/L 8 матчей] (соперники, отказы) | Elo X | Hold X% | Break X% | DR X
@@ -90,33 +89,36 @@ def analyze_with_search(user_input: str) -> str:
 """
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
         "generationConfig": {"temperature": 0.1}
     }
     
-    models = ["gemini-3.6-flash", "gemini-3.7-flash"]
-    last_error = ""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
     
-    for model_name in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_KEY}"
+    for attempt in range(3):
         try:
-            with httpx.Client(timeout=90.0) as client:
+            with httpx.Client(timeout=60.0) as client:
                 res = client.post(url, headers=headers, json=payload)
                 res_json = res.json()
                 
-                if "candidates" in res_json:
+                if res.status_code == 200 and "candidates" in res_json:
                     parts = res_json["candidates"][0].get("content", {}).get("parts", [])
                     text_parts = [p.get("text", "") for p in parts if "text" in p and not p.get("thought", False)]
                     full_text = "".join(text_parts).strip()
                     clean_text = re.sub(r'(?i)^.*?(?=📊|\*\*Форма|\*\*Метрики)', '', full_text, flags=re.DOTALL)
                     return clean_text.strip() if clean_text.strip() else full_text
+                elif res.status_code == 503 and attempt < 2:
+                    time.sleep(2)
+                    continue
                 elif "error" in res_json:
-                    last_error = res_json["error"].get("message", "Лимит исчерпан")
+                    return f"⚠️ Ошибка API: {res_json['error'].get('message', 'Неизвестная ошибка')}"
+                else:
+                    return f"⚠️ Ошибка сервера ({res.status_code}): {res.text}"
         except Exception as e:
-            last_error = str(e)
-            continue
+            if attempt == 2:
+                return f"⚠️ Ошибка сети: {e}"
+            time.sleep(2)
             
-    return f"⚠️ Ошибка обработки: {last_error}"
+    return "⚠️ Сервер временно не отвечает. Попробуйте еще раз."
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     if message.from_user.id != ALLOWED_USER_ID:
