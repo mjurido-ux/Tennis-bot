@@ -7,7 +7,7 @@ import telebot
 from bs4 import BeautifulSoup
 from flask import Flask
 app = Flask(__name__)
-# Приватный доступ
+# Приватный доступ только для вашего аккаунта
 ALLOWED_USER_ID = 365657270
 @app.route('/')
 def home():
@@ -16,7 +16,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 threading.Thread(target=run_flask, daemon=True).start()
-# Ключи напрямую
 TELEGRAM_BOT_TOKEN = "8941843904:" + "AAGJ4jY3xPZZx1rOmPSOznZDJIpEoE7Y3vQ"
 GEMINI_KEY = "AQ.Ab8RN6Iov2hfVt-o" + "Hpiv5vSkcDMDD8W2c43EuIaNFd4ZTvKNAw"
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, threaded=True)
@@ -70,17 +69,17 @@ def analyze_with_search(user_input: str) -> str:
 Ты — спортивный аналитик линии и калькулятор рисков.
 Язык: строго русский.
 ЗАДАЧА:
-Для каждого матча найди через Google Search по базам Flashscore и Tennis Abstract:
+Для каждого матча найди через Google Search по базам Tennis Abstract и Flashscore:
 1. ТЕКУЩАЯ ФОРМА L8 (ОБЯЗАТЕЛЬНЫЙ БАЗОВЫЙ ФИЛЬТР):
    - Детальный разбор последних 8 официальных матчей (W/L) каждого игрока: счета, покрытие, уровень оппозиции, отказы, спад формы.
 2. МЕТРИКИ TENNIS ABSTRACT:
    - Surface Elo, Hold %, Break %, Dominance Ratio (DR), 2nd Serve Win %.
 3. АНАЛИЗ ВСЕХ РЫНКОВ:
-   - Оцени чистые исходы, форы по геймам/сетам и тоталы для нивелирования рисков.
+   - Исходы, форы по геймам/сетам, тоталы для нивелирования рисков.
 ФОРМАТ ВЫДАЧИ:
 📊 **Форма L8 и метрики Tennis Abstract**
-• [Игрок 1]: L8: [W/L за 8 матчей] (Детали: соперники, кого обыграл/кому уступил, отказы) | Elo: [X] | Hold: [X]% | Break: [X]% | DR: [X]
-• [Игрок 2]: L8: [W/L за 8 матчей] (Детали: соперники, кого обыграл/кому уступил, отказы) | Elo: [X] | Hold: [X]% | Break: [X]% | DR: [X]
+• [Игрок 1]: L8: [W/L 8 матчей] (соперники, отказы) | Elo X | Hold X% | Break X% | DR X
+• [Игрок 2]: L8: [W/L 8 матчей] (соперники, отказы) | Elo X | Hold X% | Break X% | DR X
 📋 **Сводная таблица по линии**
 
 | # | Матч | Выбор (все маркеты) | Главный фактор и риск |
@@ -133,7 +132,7 @@ def handle_msg(message):
         bot.reply_to(message, "Отправьте список матчей.")
         return
         
-    msg = bot.reply_to(message, "⏳ Рассчитываю форму L8, метрики и маркеты...")
+    msg = bot.reply_to(message, "⏳ Рассчитываю метрики и риски...")
     
     urls = re.findall(r'https?://[^\s]+', raw_text)
     match_context = raw_text
