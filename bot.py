@@ -6,8 +6,8 @@ import httpx
 import telebot
 from bs4 import BeautifulSoup
 from flask import Flask
+from duckduckgo_search import DDGS
 app = Flask(__name__)
-# Приватный доступ только для вашего аккаунта
 ALLOWED_USER_ID = 365657270
 @app.route('/')
 def home():
@@ -16,7 +16,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 threading.Thread(target=run_flask, daemon=True).start()
-# Ключи доступа
 TELEGRAM_BOT_TOKEN = "8941843904:" + "AAGJ4jY3xPZZx1rOmPSOznZDJIpEoE7Y3vQ"
 GEMINI_KEY = "AQ.Ab8RN6Iov2hfVt-o" + "Hpiv5vSkcDMDD8W2c43EuIaNFd4ZTvKNAw"
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, threaded=True)
@@ -47,31 +46,31 @@ def send_long_message(chat_id, text, reply_to_msg_id=None):
         parts.append(text)
     for part in parts:
         bot.send_message(chat_id, part)
-def fetch_page_context(url: str) -> str:
+def get_live_tennis_data(query_text: str) -> str:
+    collected = []
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        with httpx.Client(follow_redirects=True, headers=headers, timeout=8.0) as client:
-            resp = client.get(url)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            title = soup.title.string if soup.title else ""
-            desc = ""
-            tag = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
-            if tag and tag.get('content'):
-                desc = tag['content']
-            return f"{title} | {desc}"
+        with DDGS() as ddgs:
+            search_query = f"tennis flashscore {query_text} recent results 2026"
+            results = list(ddgs.text(search_query, max_results=6))
+            for r in results:
+                collected.append(f"[{r.get('title', '')}]: {r.get('body', '')}")
     except Exception:
-        return url
+        pass
+    return "\n".join(collected)
 def analyze_with_search(user_input: str) -> str:
     headers = {"Content-Type": "application/json"}
+    live_facts = get_live_tennis_data(user_input)
     
     prompt = f"""
 Контекст запроса:
 {user_input}
+Реальные факты и результаты из сети (используй строго их, не выдумывай матчи):
+{live_facts}
 Ты — профессиональный спортивный аналитик линии и калькулятор рисков.
 Язык: строго русский.
 ЗАДАЧА:
-1. Для каждой пары теннисистов выведи метрики Tennis Abstract и краткий баланс формы за последние 5 матчей (L5) со списком соперников.
-2. В итоговой таблице выбери самый выгодный маркет (исход, фора или тотал) для нивелирования рисков и укажи степень риска с ключевым фактором (травмы, спад, отказы).
+1. Выведи метрики Tennis Abstract и форму L5 строго по реальным последним матчам (счет, соперник). Если матчей в фактах нет, напиши реальный статус формы без выдумок.
+2. Сформируй итоговую таблицу: ровно 1 маркет на матч для нивелирования рисков + ключевой риск (травмы, отказы, усталость).
 СТРОГИЙ ФОРМАТ ВЫДАЧИ:
 📊 **Метрики Tennis Abstract и форма L5**
 • **[Игрок 1]**: Elo: [X] | Hold: [X]% | Break: [X]% | DR: [X] | L5: [W-L] (соперники, отказы/травмы)
@@ -80,7 +79,7 @@ def analyze_with_search(user_input: str) -> str:
 
 | Матч | Выбор маркета | Риск / Фактор |
 | :--- | :--- | :--- |
-| **[Игрок 1] vs [Игрок 2]** | [Выбор исхода/форы/тотала] | **[Низкий / Средний / Высокий].** [Суть перевеса и главный риск: травмы, отказы, усталость] |
+| **[Игрок 1] vs [Игрок 2]** | [Выбор исхода/форы/тотала] | **[Низкий / Средний / Высокий].** [Суть перевеса и главный фактор] |
 
 """
     payload = {
@@ -131,15 +130,8 @@ def handle_msg(message):
         bot.reply_to(message, "Отправьте список матчей.")
         return
         
-    msg = bot.reply_to(message, "⏳ Рассчитываю форму L5, метрики и маркеты...")
-    
-    urls = re.findall(r'https?://[^\s]+', raw_text)
-    match_context = raw_text
-    if urls:
-        extracted = [fetch_page_context(u) for u in urls]
-        match_context = "\n".join(extracted) + "\n\n" + raw_text
-        
-    report = analyze_with_search(match_context)
+    msg = bot.reply_to(message, "⏳ Ищу свежие результаты L5 и считаю линию...")
+    report = analyze_with_search(raw_text)
     send_long_message(message.chat.id, report, reply_to_msg_id=msg.message_id)
 if __name__ == "__main__":
     try:
